@@ -1,0 +1,30 @@
+# ── 빌드 산출물 ──────────────────────────────────────────
+backtester
+backtester_new
+*.o
+*.a
+
+# ── 결과 데이터 (용량 큼) ─────────────────────────────────
+results/*.json
+results/*.jsonl
+results/*.log
+results/*.eq.json
+results/prepared/
+
+# arch_diagram, STRATEGY_GUIDE 등 문서는 포함
+!results/.gitkeep
+
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── OS / 에디터 ───────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Claude 세션 ───────────────────────────────────────────
+.claude/

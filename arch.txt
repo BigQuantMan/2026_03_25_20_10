@@ -1,0 +1,15 @@
+binance-backtester/
+├── Makefile                      ← make / make run / make clean
+├── include/
+│   ├── types.hpp                 ← OptionBar, Order, Position (전략 제작자 읽을 것)
+│   ├── market_data.hpp           ← MarketSnapshot (read-only, look-ahead 차단)
+│   ├── strategy.hpp              ← Strategy 추상 클래스 (이것만 상속하면 됨)
+│   ├── data_feed.hpp/backtester.hpp/portfolio.hpp
+│   └── metrics/                  ← Sharpe, TotalReturn, DailyTurnover + Registry
+├── src/                          ← 엔진 구현체 (전략 제작자 수정 불가)
+├── strategies/
+│   └── example_pcp.hpp           ← Put-Call Parity 예시 전략
+├── main.cpp                      ← 전략 연결 진입점
+└── tools/
+    ├── prepare_data.py           ← parquet → IS/OOS CSV 분리 (OOS 30일 숨김)
+    └── visualize.py              ← 결과 JSON → 차트 PNG

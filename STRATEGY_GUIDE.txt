@@ -1,0 +1,398 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║            Binance Backtester — 전략 개발자 가이드                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+이 문서는 새 전략(Strategy)을 작성하기 위해 알아야 할 모든 정보를 담고 있다.
+파일 위치: binance-backtester/STRATEGY_GUIDE.txt
+
+
+──────────────────────────────────────────────────────────────────────────────
+1. 전체 실행 흐름 (반드시 숙지)
+──────────────────────────────────────────────────────────────────────────────
+
+매 바(bar)마다 아래 순서로 실행된다:
+
+  Step 1  DataFeed.next()              → 현재 바 t의 스냅샷 생성
+  Step 2  Portfolio.fill_orders(t)     → 이전 바(t-1)에서 제출한 주문을 t 가격으로 체결
+  Step 3  Portfolio.mark_to_market(t)  → 포트폴리오 시가 업데이트 (unrealized PnL)
+  Step 4  Metric.on_bar(t, state)      → 지표 계산 (Sharpe, Return 등)
+  Step 5  Strategy.on_bar(t, snap)     → 전략 호출 → 주문 목록 반환 (→ t+1에서 체결)
+
+핵심: 이번 바에서 반환한 주문은 "다음 바"에서 체결된다.
+      → 현재 close를 보고 "이 가격에 즉시 체결"하는 건 불가능 (look-ahead 차단)
+
+
+──────────────────────────────────────────────────────────────────────────────
+2. 전략 클래스 작성법
+──────────────────────────────────────────────────────────────────────────────
+
+  #include "../include/strategy.hpp"
+  #include "../include/market_data.hpp"
+  #include <deque>
+
+  class MyStrategy : public Strategy {
+  public:
+      // ── 필수 ─────────────────────────────────────────
+      std::string name() const override { return "MyStrategy"; }
+
+      std::vector<Order> on_bar(int64_t ts, const MarketSnapshot& snap) override {
+          // 매 바마다 호출됨
+          // ts  : 현재 바의 Unix milliseconds (UTC)
+          // snap: 현재 시점까지의 시장 스냅샷 (읽기 전용)
+          // return: 제출할 주문 목록. 없으면 {} 반환
+          return {};
+      }
+
+      // ── 선택 ─────────────────────────────────────────
+      void on_start() override {
+          // 백테스트 시작 시 1회 호출. 상태 초기화에 사용.
+      }
+
+      void on_end() override {
+          // 백테스트 종료 시 1회 호출. 정리 작업.
+      }
+
+      void on_fill(const std::vector<Order>& filled) override {
+          // t+1 주문 체결 직후 호출.
+          // filled = 실제로 체결된 주문 목록
+          //   (현금 부족, fill price=0 등으로 skip된 주문은 포함 안 됨)
+          // 포지션 상태를 정확히 추적하려면 여기서 position_ 업데이트 권장.
+      }
+
+  private:
+      int    position_ = 0;   // 상태 변수는 자유롭게 선언
+      double prev_ma_  = 0.0;
+      std::deque<double> buf_;
+  };
+
+
+──────────────────────────────────────────────────────────────────────────────
+3. MarketSnapshot API — 시장 데이터 접근
+──────────────────────────────────────────────────────────────────────────────
+
+  snap.timestamp()          → 현재 바의 Unix ms (int64_t)
+  snap.spot_price()         → 현물 기준가격 (--spot 심볼 기준, 보통 BTCUSDT close)
+  snap.empty()              → 데이터가 아무것도 없으면 true
+
+  ── Futures 모드 ──────────────────────────────────────────────────
+  snap.futures("BTCUSDT")   → 해당 심볼 FuturesBar 포인터 (없으면 nullptr)
+  snap.all_futures()        → 모든 심볼 맵 (unordered_map<string, FuturesBar>&)
+  snap.futures_symbols()    → 심볼 목록 (vector<string>)
+
+  예시:
+    const FuturesBar* bar = snap.futures("BTCUSDT");
+    if (!bar) return {};              // 데이터 없을 때 방어 코드 필수
+    double price = bar->close;
+    double fr    = bar->funding_rate;
+
+    for (const auto& [sym, bar] : snap.all_futures()) {
+        // 멀티심볼 순회
+    }
+
+  ── Options 모드 ──────────────────────────────────────────────────
+  snap.all_options()                   → 전체 옵션 바 목록 (vector<OptionBar>&)
+  snap.calls()                         → 콜옵션만
+  snap.puts()                          → 풋옵션만
+  snap.by_expiry("2026-01-25")         → 특정 만기 옵션만
+  snap.available_expiries()            → 활성 만기일 목록 (오름차순)
+  snap.front_expiry()                  → 가장 가까운 만기 (프론트 먼스)
+  snap.atm_strike("2026-01-25")        → 특정 만기의 ATM 행사가
+  snap.get(90000, 'C', "2026-01-25")  → 특정 옵션 1개 조회 (optional<OptionBar>)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4. FuturesBar 필드 목록
+──────────────────────────────────────────────────────────────────────────────
+
+  bar->symbol          "BTCUSDT" 등 심볼명
+  bar->timestamp       Unix ms
+
+  ── OHLCV ─────────────────────────────────────────────────────────
+  bar->open            시가
+  bar->high            고가
+  bar->low             저가
+  bar->close           종가
+  bar->volume          거래량 (base asset 기준)
+  bar->quote_volume    거래량 (USDT 기준)
+
+  ── 파생 지표 (없으면 0.0) ─────────────────────────────────────────
+  bar->funding_rate    펀딩비 (예: 0.0001 = 0.01%)
+  bar->open_interest   미결제약정 (계약 수)
+  bar->long_ratio      롱 비율 (0~1)
+  bar->short_ratio     숏 비율 (0~1)
+  bar->taker_buy_ratio 시장가 매수 비율 (0~1)
+
+  ── 편의 메서드 ──────────────────────────────────────────────────
+  bar->mid_price()     (high + low) / 2.0
+
+
+──────────────────────────────────────────────────────────────────────────────
+5. OptionBar 필드 목록
+──────────────────────────────────────────────────────────────────────────────
+
+  opt.symbol          "BTC-260125-89000-C"
+  opt.timestamp       Unix ms
+  opt.strike          행사가 (USDT 정수)
+  opt.expiry          "2026-01-25"
+  opt.type            'C' (콜) 또는 'P' (풋)
+  opt.mark_price      Binance 마크 프라이스 (USDT)
+  opt.mark_iv         내재 변동성 (소수, 예: 0.85 = 85%)
+  opt.index_price     BTC 현물 인덱스 가격
+  opt.delta           그릭스: 델타
+  opt.gamma           그릭스: 감마
+  opt.theta           그릭스: 세타
+  opt.vega            그릭스: 베가
+  opt.best_bid        최우선 매수호가
+  opt.best_ask        최우선 매도호가
+  opt.open_interest   미결제약정
+
+  ── 편의 메서드 ──────────────────────────────────────────────────
+  opt.is_call()       type == 'C'
+  opt.is_put()        type == 'P'
+  opt.mid_price()     (bid + ask) / 2.0, 없으면 mark_price
+
+
+──────────────────────────────────────────────────────────────────────────────
+6. Order — 주문 생성 방법 (팩토리 메서드)
+──────────────────────────────────────────────────────────────────────────────
+
+  ── 선물 주문 ─────────────────────────────────────────────────────
+  Order::long_future(qty)                   BTCUSDT 선물 매수
+  Order::long_future(qty, "ETHUSDT")        ETH 선물 매수 (멀티심볼)
+  Order::short_future(qty)                  BTCUSDT 선물 매도
+  Order::short_future(qty, "SOLUSDT")       SOL 선물 매도
+
+  ── 현물 주문 ─────────────────────────────────────────────────────
+  Order::buy_spot(qty)                      BTC 현물 매수
+  Order::sell_spot(qty)                     BTC 현물 매도
+
+  ── 옵션 주문 ─────────────────────────────────────────────────────
+  Order::buy_call(strike, expiry, qty)      콜 매수
+  Order::sell_call(strike, expiry, qty)     콜 매도 (숏)
+  Order::buy_put(strike, expiry, qty)       풋 매수
+  Order::sell_put(strike, expiry, qty)      풋 매도 (숏)
+
+  ── 주의 사항 ─────────────────────────────────────────────────────
+  * quantity는 반드시 > 0. 방향은 Long/Short으로만 구분.
+  * 한 번에 여러 주문을 담은 vector 반환 가능:
+      return { Order::long_future(0.01, "BTC"), Order::long_future(0.01, "ETH") };
+
+
+──────────────────────────────────────────────────────────────────────────────
+7. 포지션 청산 / 반전 메커니즘
+──────────────────────────────────────────────────────────────────────────────
+
+Portfolio의 fill_orders는 다음 규칙으로 작동한다:
+
+  LONG 주문 제출 시:
+    → 기존 SHORT 포지션이 있으면 먼저 청산
+    → 없으면 신규 LONG 오픈
+
+  SHORT 주문 제출 시:
+    → 기존 LONG 포지션이 있으면 먼저 청산
+    → 없으면 신규 SHORT 오픈
+
+  포지션 반전 (SHORT → LONG) 예시:
+    orders.push_back(Order::long_future(qty, sym));  // SHORT 청산
+    orders.push_back(Order::long_future(qty, sym));  // LONG 진입
+
+    * 첫 번째 LONG: 기존 SHORT를 청산
+    * 두 번째 LONG: SHORT가 없으므로 신규 LONG 오픈
+
+  포지션 반전 (LONG → SHORT) 예시:
+    orders.push_back(Order::short_future(qty, sym)); // LONG 청산
+    orders.push_back(Order::short_future(qty, sym)); // SHORT 진입
+
+  단순 청산만 하려면 주문 1개만 제출하면 된다.
+
+
+──────────────────────────────────────────────────────────────────────────────
+8. 현금 / PnL 계산 원리
+──────────────────────────────────────────────────────────────────────────────
+
+  total_value = initial_capital + realized_pnl + unrealized_pnl
+
+  * realized_pnl  : 청산 완료된 거래의 누적 손익
+  * unrealized_pnl: 현재 보유 포지션의 평가 손익 (매 바 mark-to-market)
+
+  LONG 진입 시: cash -= fill_price × qty
+  LONG 청산 시: cash += fill_price × qty     (매도 대금)
+                realized_pnl += (close_price - entry_price) × qty
+
+  SHORT 진입 시: cash -= fill_price × qty    (담보 예치)
+  SHORT 청산 시: cash += entry_price × qty + pnl  (담보 + 이익)
+                 realized_pnl += (entry_price - close_price) × qty
+
+  ※ total_value는 cash가 아닌 realized + unrealized 기반이므로
+     cash 버그가 있어도 수익률 계산에는 영향 없음.
+     단, cash < notional 이면 주문이 skip된다.
+
+
+──────────────────────────────────────────────────────────────────────────────
+9. 포지션 추적 패턴 (권장)
+──────────────────────────────────────────────────────────────────────────────
+
+전략 내부에서 포지션을 직접 추적하는 두 가지 방법:
+
+  방법 A: on_bar에서 신호 발생 시 position_ 즉시 업데이트
+    → 간단하지만, 실제 체결 실패(현금 부족 등) 시 불일치 가능
+
+  방법 B: on_fill 콜백에서 업데이트 (권장 — 정확함)
+    void on_fill(const std::vector<Order>& filled) override {
+        for (const auto& o : filled) {
+            if (o.instrument != Instrument::FUTURE) continue;
+            if (o.side == Side::LONG)  position_++;
+            if (o.side == Side::SHORT) position_--;
+        }
+    }
+
+  방법 C: deque 기반 신호만 추적 (재진입 방지용)
+    bool in_position_ = false;
+    // on_bar 에서 in_position_ 체크 후 주문 제출
+
+
+──────────────────────────────────────────────────────────────────────────────
+10. 데이터 인터벌 설정
+──────────────────────────────────────────────────────────────────────────────
+
+UI "Prepare Data" 버튼은 기본 1h 인터벌로 데이터를 가져온다.
+5분봉 전략을 테스트하려면 백엔드에서 인터벌을 바꿔야 한다.
+
+  방법 1: UI에서 직접 API 호출
+    POST /api/prepare-futures  { "interval": "5m" }
+
+  방법 2: 커맨드라인 직접 실행 (백엔드 디렉토리에서)
+    python3 tools/prepare_futures_data.py --interval 5m
+
+  지원 인터벌: 1m, 3m, 5m, 15m, 30m, 1h, 4h, 1d
+
+  ※ 5분봉 MA25 전략의 경우: --interval 5m 으로 데이터 준비 필수
+
+  생성된 CSV 이름 예시:
+    results/prepared/futures_is_data_5m.csv  (인터벌에 따라 이름 다를 수 있음)
+
+
+──────────────────────────────────────────────────────────────────────────────
+11. 새 전략 등록 방법 (main.cpp)
+──────────────────────────────────────────────────────────────────────────────
+
+  ① strategies/ 폴더에 MyStrategy.hpp 파일 작성
+
+  ② main.cpp 상단에 include 추가:
+       #include "strategies/MyStrategy.hpp"
+
+  ③ main.cpp의 전략 자동 추론 else에 strategy name 추가:
+       std::cerr << "  사용 가능: ..., MyStrategy\n";
+
+  ④ main.cpp의 dispatch 블록에 추가:
+       } else if (strategy == "MyStrategy") {
+           MyStrategy s;
+           result = bt.run(s, feed);
+       }
+
+  ⑤ backtester-ui/backend/main.py의 /api/strategy-list에 추가:
+       {"name": "MyStrategy", "label": "My Strategy", "data": "futures"},
+
+  ⑥ backtester-ui/frontend/src/components/StrategyTab.jsx의
+     STRATEGY_DATA 객체에 추가:
+       MyStrategy: 'futures',  // 또는 'options'
+
+  ⑦ 빌드: UI에서 Build 버튼 클릭 또는 make -j4
+
+
+──────────────────────────────────────────────────────────────────────────────
+12. 흔한 실수 / 주의사항
+──────────────────────────────────────────────────────────────────────────────
+
+  ❌ 현재 바 종가로 즉시 체결 가정
+     → 주문은 t+1 바의 open 가격으로 체결됨 (실제로는 close 사용)
+
+  ❌ quantity <= 0 으로 주문 제출
+     → Portfolio에서 자동으로 skip (경고 출력)
+
+  ❌ 연속된 같은 방향 주문 중복 제출
+     → LONG 주문이 SHORT 청산 + LONG 진입 각각 필요 (2개 제출)
+     → 단, 포지션이 없을 때는 1개만 제출해도 됨
+
+  ❌ null 포인터 역참조
+     → snap.futures("BTCUSDT")가 nullptr 반환 가능 → 항상 if (!bar) return {} 체크
+
+  ❌ 데이터 부족 시 MA 계산
+     → deque 크기가 period에 미달 시 계산 생략 필요
+
+  ❌ 멀티심볼에서 심볼 미지정
+     → Order::long_future(qty) 기본값은 "BTCUSDT"
+     → 다른 심볼이면 반드시 Order::long_future(qty, "ETHUSDT") 처럼 지정
+
+  ❌ 5분봉 전략인데 1h 데이터로 테스트
+     → "Prepare Data"는 기본 1h → 5m 데이터는 별도 prepare 필요
+
+
+──────────────────────────────────────────────────────────────────────────────
+13. 전략 템플릿 (복사해서 사용)
+──────────────────────────────────────────────────────────────────────────────
+
+#pragma once
+#include "../include/strategy.hpp"
+#include "../include/market_data.hpp"
+#include <string>
+#include <deque>
+#include <iostream>
+
+class MyStrategy : public Strategy {
+public:
+    // ── 파라미터 (조정 가능) ──────────────────────────────────────
+    int         lookback = 20;
+    double      quantity = 0.01;
+    std::string symbol   = "BTCUSDT";
+
+    std::string name() const override { return "MyStrategy"; }
+
+    void on_start() override {
+        position_ = 0;
+        buf_.clear();
+        std::cerr << "[MyStrategy] 시작. symbol=" << symbol << "\n";
+    }
+
+    std::vector<Order> on_bar(int64_t ts, const MarketSnapshot& snap) override {
+        const FuturesBar* bar = snap.futures(symbol);
+        if (!bar || bar->close <= 0) return {};
+
+        // 지표 계산용 버퍼 업데이트
+        buf_.push_back(bar->close);
+        if ((int)buf_.size() > lookback)
+            buf_.pop_front();
+        if ((int)buf_.size() < lookback) return {};  // 워밍업
+
+        // 매매 신호 로직
+        // double signal = ...;
+
+        std::vector<Order> orders;
+
+        // 예: 진입 조건
+        // if (signal > 0 && position_ <= 0) {
+        //     if (position_ == -1) orders.push_back(Order::long_future(quantity, symbol));
+        //     orders.push_back(Order::long_future(quantity, symbol));
+        //     position_ = 1;
+        // } else if (signal < 0 && position_ >= 0) {
+        //     if (position_ == 1) orders.push_back(Order::short_future(quantity, symbol));
+        //     orders.push_back(Order::short_future(quantity, symbol));
+        //     position_ = -1;
+        // }
+
+        return orders;
+    }
+
+    void on_fill(const std::vector<Order>& filled) override {
+        for (const auto& o : filled) {
+            if (o.instrument != Instrument::FUTURE) continue;
+            std::cerr << "[MyStrategy] "
+                      << (o.side == Side::LONG ? "LONG" : "SHORT")
+                      << " " << o.quantity << " " << o.symbol << "\n";
+        }
+    }
+
+private:
+    int    position_ = 0;    // 0=없음, 1=롱, -1=숏
+    std::deque<double> buf_;
+};

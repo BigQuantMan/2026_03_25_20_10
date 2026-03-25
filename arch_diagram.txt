@@ -1,0 +1,88 @@
+================================================================================
+  binance-backtester  구조 도식
+  언어: C++
+================================================================================
+
+  ┌─────────────┐    ┌──────────────────────────────────────┐
+  │  main.cpp   │───▶│            Backtester                │
+  │             │    │                                      │
+  │  전략 선택  │    │  run(Strategy&, IFeed&)               │
+  │  피드 선택  │    │                                      │
+  │  설정 지정  │    │  매 바 실행 순서:                     │
+  └─────────────┘    │   1. feed.next() → 스냅샷(t)         │
+                     │   2. portfolio.fill_orders(t-1 주문)  │ ← t봉 open 체결
+                     │   3. portfolio.mark_to_market(t)      │ ← t봉 close 평가
+                     │   4. metric.on_bar(t)                 │
+                     │   5. strategy.on_bar(t) → 새 주문    │ ← 다음 바에서 체결
+                     └──────┬──────────────┬────────────────┘
+                            │              │
+              ┌─────────────▼──┐    ┌──────▼──────────────────────────────┐
+              │    IFeed       │    │           Strategy (추상)            │
+              │  (인터페이스)  │    │                                      │
+              │                │    │  virtual on_bar() = 0  ← 핵심 구현  │
+              │ ┌────────────┐ │    │  virtual on_fill()     ← 체결 콜백  │
+              │ │ DataFeed   │ │    │  virtual on_start/end()             │
+              │ │ (옵션 CSV) │ │    └──────────────┬──────────────────────┘
+              │ └────────────┘ │                   │ 상속
+              │                │        ┌──────────┴──────────┐
+              │ ┌────────────┐ │        │   strategies/        │
+              │ │FuturesFeed │ │        │                      │
+              │ │(선물 CSV)  │ │        │  GoldenCross.hpp     │
+              │ └────────────┘ │        │  ShortStrangle.hpp   │
+              │                │        │  IVFuturesSignal.hpp │
+              │ ┌────────────┐ │        │  ExamplePCP.hpp      │
+              │ │UnifiedFeed │ │        └──────────────────────┘
+              │ │(옵션+선물) │ │
+              │ └────────────┘ │
+              └────────┬───────┘
+                       │ 생성
+                       ▼
+              ┌─────────────────────────────────────────────────────────┐
+              │                   MarketSnapshot                         │
+              │                                                         │
+              │  spot_price()                                           │
+              │  calls() / puts() / get(strike, type, expiry)          │  ← Options모드
+              │  atm_strike() / front_expiry()                          │
+              │                                                         │
+              │  futures(symbol) / active_futures() / all_futures()    │  ← Futures모드
+              └─────────────────────────────────────────────────────────┘
+                       │ 포함
+                       ├── OptionBar  { strike, expiry, type, mark_price,
+                       │               delta, gamma, theta, vega, bid, ask }
+                       └── FuturesBar { symbol, OHLCV, funding_rate, OI,
+                                        long/short_ratio, is_active }
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │                        Portfolio                                    │
+  │                                                                    │
+  │  fill_orders()    ← t+1 open 가격으로 체결 (look-ahead 차단)       │
+  │  mark_to_market() ← t close 기준 평가                              │
+  │                                                                    │
+  │  positions[]      { OPTION | FUTURE | SPOT, entry_price, qty }    │
+  │  cash             현금 잔고 (USDT)                                 │
+  │  trades[]         체결 기록 → results/*.trades.jsonl               │
+  └────────────────────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │                    Metrics (플러그인)                               │
+  │                                                                    │
+  │  Sharpe          연율화 샤프 비율                                  │
+  │  TotalReturn     총 수익률 (%)                                     │
+  │  DailyTurnover   일평균 회전율                                     │
+  └────────────────────────────────────────────────────────────────────┘
+
+  결과 출력 (results/)
+  ├── {Strategy}_{ts}.json          메트릭 요약
+  ├── {Strategy}_{ts}.eq.json       equity curve (15분 샘플링)
+  ├── {Strategy}_{ts}.trades.jsonl  전체 체결 기록
+  └── {Strategy}_{ts}.log           실행 로그
+
+================================================================================
+  핵심 설계 원칙
+================================================================================
+
+  Look-ahead 차단   전략이 t봉 close 보고 주문 → t+1봉 open에서 체결
+  Feed 추상화       IFeed 인터페이스로 옵션/선물/통합 피드 동일 엔진 사용
+  Snapshot 불변     MarketSnapshot은 Feed만 생성 가능, 전략은 read-only
+  전략 확장         Strategy 상속 후 on_bar() 구현만 하면 됨
+  Metrics 플러그인  BacktestConfig::metrics에 이름 추가로 교체 가능
