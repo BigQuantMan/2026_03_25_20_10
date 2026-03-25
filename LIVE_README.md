@@ -1,6 +1,9 @@
 Visual Studio로 trackA_live_vs.sln을 열고 솔루션 탐색기 - trackA_live_vs우클릭 - 디버깅-명령 인수에 아래와 같이 입력
 
 
+`--strategy LiveFundingMomentum` 부분을 `GoldenCross` 등으로 바꿔서 전략을 변경할 수 있음
+
+
 `interval 1m` 부분을 `5m`, `15m`, ... 등으로 바꿔서 전략의 타임 프레임을 변경할 수 있음
 
 
