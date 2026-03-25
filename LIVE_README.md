@@ -146,7 +146,7 @@ int n = 3;
 부분 밑에
 ```
         else if (strategy_name == "Strategy_name") {
-            auto s = std::make_unique<LiveCloseMomentumStrategy>();
+            auto s = std::make_unique<Strategy_name>();
             s->symbol = symbol;
             s->quantity = quantity;
             s->n = n;
@@ -180,7 +180,7 @@ int n=3;
 밑에
 ```
         else if (strategy_name == "Strategy_name") {
-            auto s = std::make_unique<LiveCloseMomentumStrategy>();
+            auto s = std::make_unique<Strategy_name>();
             s->symbol = symbol;
             s->quantity = quantity;
             s->n = n;
