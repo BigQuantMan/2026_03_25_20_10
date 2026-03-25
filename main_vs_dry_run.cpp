@@ -58,9 +58,9 @@ int main(int argc, char* argv[]) {
 
     std::string symbol = "BTCUSDT";
     double quantity = 0.01;
-    double long_threshold = -0.0001;
-    double short_threshold = 0.0001;
-    double exit_threshold = 0.00005;
+    double long_threshold = -0.0000001;
+    double short_threshold = 0.0000001;
+    double exit_threshold = 0.00000005;
 
     int fast = 5;
     int slow = 20;
