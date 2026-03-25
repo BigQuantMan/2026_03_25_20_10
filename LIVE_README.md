@@ -156,3 +156,36 @@ int n = 3;
 입력
 
 
+`main_live.cpp`에서도
+```
+    // GoldenCross defaults
+    int fast = 5;
+    int slow = 20;
+    double notional = 100.0;
+```
+밑에
+```
+int n=3;
+```
+입력
+```
+    } else if (strategy_name == "LiveGoldenCross") {
+        auto s = std::make_unique<LiveGoldenCrossStrategy>();
+        s->fast_period = fast;
+        s->slow_period = slow;
+        s->notional_per_trade = notional;
+        strategy = std::move(s);
+    }
+```
+밑에
+```
+        else if (strategy_name == "Strategy_name") {
+            auto s = std::make_unique<LiveCloseMomentumStrategy>();
+            s->symbol = symbol;
+            s->quantity = quantity;
+            s->n = n;
+            strategy = std::move(s);
+        }
+```
+입력
+
