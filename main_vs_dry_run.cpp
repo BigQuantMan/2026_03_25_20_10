@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
         gw_cfg.api_key = api_key;
         gw_cfg.recv_window_ms = recv_window_ms;
         gw_cfg.dry_run = !send_test_order;
-        gw_cfg.use_test_endpoint = true;
+        gw_cfg.use_test_endpoint = false;
         gw_cfg.assume_filled_on_success = false;
         auto gateway = std::make_shared<BinanceFuturesGateway>(gw_cfg, http_client, signer);
 
