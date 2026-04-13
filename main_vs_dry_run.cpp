@@ -58,9 +58,9 @@ int main(int argc, char* argv[]) {
 
     std::string symbol = "BTCUSDT";
     double quantity = 0.01;
-    double long_threshold = -0.0001;
-    double short_threshold = 0.0001;
-    double exit_threshold = 0.00005;
+    double long_threshold = -0.0000001;
+    double short_threshold = 0.0000001;
+    double exit_threshold = 0.00000005;
 
     int fast = 5;
     int slow = 20;
@@ -151,7 +151,7 @@ int main(int argc, char* argv[]) {
         gw_cfg.api_key = api_key;
         gw_cfg.recv_window_ms = recv_window_ms;
         gw_cfg.dry_run = !send_test_order;
-        gw_cfg.use_test_endpoint = true;
+        gw_cfg.use_test_endpoint = false;
         gw_cfg.assume_filled_on_success = false;
         auto gateway = std::make_shared<BinanceFuturesGateway>(gw_cfg, http_client, signer);
 
